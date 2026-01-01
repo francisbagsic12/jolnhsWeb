@@ -43,6 +43,21 @@ mongoose
 // ==================== MODELS ====================
 
 // === NEW: Permanent archive ng votes pagkatapos ng election ===
+
+const clubRegistrationSchema = new mongoose.Schema({
+  email: { type: String, required: true, lowercase: true },
+  lrn: { type: String, required: true },
+  fullName: { type: String, required: true },
+  gradeSection: { type: String, required: true },
+  contactNumber: { type: String, required: true },
+  club: { type: String, required: true },
+  status: {
+    type: String,
+    enum: ["pending", "approved", "rejected"],
+    default: "pending",
+  },
+  appliedAt: { type: Date, default: Date.now },
+});
 const historicalVoteSchema = new mongoose.Schema({
   voterId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -180,6 +195,7 @@ const Vote = mongoose.model("Vote", voteSchema);
 const IndividualVote = mongoose.model("IndividualVote", individualVoteSchema);
 const Voter = mongoose.model("Voter", voterSchema);
 const Winner = mongoose.model("Winner", winnerSchema);
+const Clubs = mongoose.model("Clubs", clubRegistrationSchema);
 const ElectionSettings = mongoose.model(
   "ElectionSettings",
   electionSettingsSchema
@@ -1005,22 +1021,138 @@ app.get("/api/admin/dashboard-voting-stats", async (req, res) => {
 });
 
 // 2. Dashboard Registration Stats (kung may club registration pa rin)
-app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
-  try {
-    // Halimbawa lang — pwede mong i-adjust base sa schema mo
-    const total = await Voter.countDocuments(); // o kung may club field
-    const byClub = {
-      Sports: 48,
-      Torch: 32,
-      // ... etc.
-    };
+// app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
+//   try {
+//     // Halimbawa lang — pwede mong i-adjust base sa schema mo
+//     const total = await Voter.countDocuments(); // o kung may club field
+//     const byClub = {
+//       Sports: 48,
+//       Torch: 32,
+//       // ... etc.
+//     };
 
-    res.json({
-      totalRegistrations: total,
-      byClub,
+//     res.json({
+//       totalRegistrations: total,
+//       byClub,
+//     });
+//   } catch (err) {
+//     res.status(500).json({ error: "Failed to load registration stats" });
+//   }
+// });
+
+app.post("/api/club/register", async (req, res) => {
+  const { fullName, gradeSection, contactNumber, email, club } = req.body;
+
+  if (!fullName || !gradeSection || !contactNumber || !email || !club) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  if (!email.toLowerCase().endsWith("@gmail.com")) {
+    return res.status(400).json({ error: "Only Gmail addresses allowed" });
+  }
+
+  try {
+    // Check if already registered for this club
+    const existing = await ClubRegistration.findOne({
+      email: email.toLowerCase(),
+      club,
+    });
+    if (existing) {
+      return res
+        .status(409)
+        .json({ error: "You have already registered for this club" });
+    }
+
+    const registration = new ClubRegistration({
+      fullName,
+      gradeSection,
+      contactNumber,
+      email: email.toLowerCase(),
+      club,
+    });
+
+    await registration.save();
+
+    // Optional: Send confirmation email to student
+    await transporter.sendMail({
+      from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
+      to: email,
+      subject: "Club Registration Received",
+      html: `
+        <h2>Hello ${fullName},</h2>
+        <p>Your registration for <strong>${club}</strong> has been received!</p>
+        <p>Status: <strong>Pending</strong></p>
+        <p>We will notify you once approved by the club adviser.</p>
+        <p>Thank you!</p>
+      `,
+    });
+
+    res.status(201).json({
+      message: "Registration submitted successfully! Check your email.",
+      registrationId: registration._id,
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to load registration stats" });
+    console.error("Club registration error:", err);
+    res.status(500).json({ error: "Failed to submit registration" });
+  }
+});
+
+// 2. Get all pending club registrations (for admin)
+app.get("/api/admin/club-registrations", async (req, res) => {
+  try {
+    const registrations = await ClubRegistration.find()
+      .sort({ appliedAt: -1 })
+      .select("-__v");
+
+    res.json(registrations);
+  } catch (err) {
+    console.error("Fetch club registrations error:", err);
+    res.status(500).json({ error: "Failed to load registrations" });
+  }
+});
+
+// 3. Admin: Approve/Reject club registration
+app.patch("/api/admin/club-registration/:id", async (req, res) => {
+  const { status } = req.body; // "approved" or "rejected"
+
+  if (!["approved", "rejected"].includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+
+  try {
+    const registration = await ClubRegistration.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    );
+
+    if (!registration) {
+      return res.status(404).json({ error: "Registration not found" });
+    }
+
+    // Notify student
+    await transporter.sendMail({
+      from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
+      to: registration.email,
+      subject: `Club Registration ${status.toUpperCase()}`,
+      html: `
+        <h2>Hello ${registration.fullName},</h2>
+        <p>Your registration for <strong>${
+          registration.club
+        }</strong> has been <strong>${status}</strong>!</p>
+        ${
+          status === "approved"
+            ? "<p>Congratulations! You are now officially a member.</p>"
+            : "<p>Sorry, your application was not approved this time.</p>"
+        }
+        <p>Thank you for your interest!</p>
+      `,
+    });
+
+    res.json({ message: `Registration ${status}`, registration });
+  } catch (err) {
+    console.error("Update club registration error:", err);
+    res.status(500).json({ error: "Failed to update status" });
   }
 });
 // Server
