@@ -9,7 +9,7 @@ const app = express();
 // ==================== MIDDLEWARE ====================
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:5173",https://lambent-halva-1d23ab.netlify.app],
+    origin: ["http://localhost:3000", "http://localhost:5173",'https://lambent-halva-1d23ab.netlify.app'],
     credentials: true,
   })
 );
