@@ -9,7 +9,12 @@ const app = express();
 // ==================== MIDDLEWARE ====================
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:5173","https://jolnhs-admin-control.netlify.app","https://jolnhswebpage.netlify.app/"],
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "https://jolnhs-admin-control.netlify.app",
+      "https://jolnhswebpage.netlify.app/",
+    ],
     credentials: true,
   })
 );
@@ -22,6 +27,15 @@ app.use(express.json());
 // });
 // app.use("/api/", limiter);
 
+const clubVerificationLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 5, // limit each IP to 5 requests per window
+  message: {
+    error: "Too many verification attempts. Try again after 10 minutes.",
+  },
+  keyGenerator: (req) => req.ip,
+});
+const clubVerificationCodes = new Map();
 // Log every incoming request (great for debugging)
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
@@ -1020,41 +1034,118 @@ app.get("/api/admin/dashboard-voting-stats", async (req, res) => {
   }
 });
 
-// 2. Dashboard Registration Stats (kung may club registration pa rin)
-// app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
-//   try {
-//     // Halimbawa lang — pwede mong i-adjust base sa schema mo
-//     const total = await Voter.countDocuments(); // o kung may club field
-//     const byClub = {
-//       Sports: 48,
-//       Torch: 32,
-//       // ... etc.
-//     };
+app.post(
+  "/api/club/send-verification",
+  clubVerificationLimiter,
+  async (req, res) => {
+    const { email } = req.body;
 
-//     res.json({
-//       totalRegistrations: total,
-//       byClub,
-//     });
-//   } catch (err) {
-//     res.status(500).json({ error: "Failed to load registration stats" });
-//   }
-// });
+    if (!email || !email.toLowerCase().endsWith("@gmail.com")) {
+      return res
+        .status(400)
+        .json({ error: "Only Gmail addresses are allowed" });
+    }
 
+    const normalizedEmail = email.toLowerCase();
+
+    try {
+      // Optional: Check if already registered (to prevent spam)
+      const existing = await Clubs.findOne({
+        email: normalizedEmail,
+      });
+      if (existing && existing.status === "approved") {
+        return res.status(403).json({
+          error: "You are already an approved member of this club.",
+        });
+      }
+
+      // Generate 6-digit code
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+      // Store with 10-min expiry
+      clubVerificationCodes.set(normalizedEmail, {
+        code,
+        expires: Date.now() + 10 * 60 * 1000,
+      });
+
+      // Send email
+      await transporter.sendMail({
+        from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
+        to: normalizedEmail,
+        subject: "Club Registration Verification Code",
+        html: `
+          <h2>JOLNHS Club Registration</h2>
+          <h1 style="letter-spacing:12px; font-size:3rem;">${code}</h1>
+          <p>This code is valid for 10 minutes. Do not share it.</p>
+          <p>If you didn't request this, ignore this email.</p>
+        `,
+      });
+
+      console.log(`Club OTP sent to ${normalizedEmail}: ${code}`);
+
+      res.json({ message: "Verification code sent! Check your email." });
+    } catch (err) {
+      console.error("Club send-verification error:", err);
+      res.status(500).json({ error: "Failed to send verification code" });
+    }
+  }
+);
+
+// 2. Verify code for club registration
+app.post("/api/club/verify-code", async (req, res) => {
+  const { email, code } = req.body;
+
+  if (!email || !code) {
+    return res.status(400).json({ error: "Email and code are required" });
+  }
+
+  const normalizedEmail = email.toLowerCase();
+  const stored = clubVerificationCodes.get(normalizedEmail);
+
+  try {
+    if (!stored || Date.now() > stored.expires || stored.code !== code) {
+      return res.status(400).json({ error: "Invalid or expired code" });
+    }
+
+    // Success: remove the code so it can't be reused
+    clubVerificationCodes.delete(normalizedEmail);
+
+    res.json({
+      message: "Email verified successfully",
+      email: normalizedEmail,
+    });
+  } catch (err) {
+    console.error("Club verify-code error:", err);
+    res.status(500).json({ error: "Verification failed" });
+  }
+});
+
+//registration club
 app.post("/api/club/register", async (req, res) => {
-  const { fullName, gradeSection, contactNumber, email, club } = req.body;
+  const { fullName, gradeSection, contactNumber, email, club, lrn } = req.body;
 
-  if (!fullName || !gradeSection || !contactNumber || !email || !club) {
-    return res.status(400).json({ error: "All fields are required" });
+  // Updated validation – kasama na ang lrn
+  if (!fullName || !gradeSection || !contactNumber || !email || !club || !lrn) {
+    return res
+      .status(400)
+      .json({ error: "All fields are required (including LRN)" });
   }
 
   if (!email.toLowerCase().endsWith("@gmail.com")) {
     return res.status(400).json({ error: "Only Gmail addresses allowed" });
   }
 
+  // Optional: Basic LRN validation (12 digits)
+  if (!/^\d{12}$/.test(lrn)) {
+    return res.status(400).json({ error: "LRN must be exactly 12 digits" });
+  }
+
   try {
+    const normalizedEmail = email.toLowerCase();
+
     // Check if already registered for this club
-    const existing = await ClubRegistration.findOne({
-      email: email.toLowerCase(),
+    const existing = await Clubs.findOne({
+      email: normalizedEmail,
       club,
     });
     if (existing) {
@@ -1063,17 +1154,19 @@ app.post("/api/club/register", async (req, res) => {
         .json({ error: "You have already registered for this club" });
     }
 
-    const registration = new ClubRegistration({
+    // Create registration – kasama na ang lrn
+    const registration = new Clubs({
       fullName,
       gradeSection,
       contactNumber,
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       club,
+      lrn, // ← NADAGDAG NA ITO
     });
 
     await registration.save();
 
-    // Optional: Send confirmation email to student
+    // Send confirmation email
     await transporter.sendMail({
       from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
       to: email,
@@ -1081,6 +1174,7 @@ app.post("/api/club/register", async (req, res) => {
       html: `
         <h2>Hello ${fullName},</h2>
         <p>Your registration for <strong>${club}</strong> has been received!</p>
+        <p>LRN: ${lrn}</p>
         <p>Status: <strong>Pending</strong></p>
         <p>We will notify you once approved by the club adviser.</p>
         <p>Thank you!</p>
@@ -1089,18 +1183,21 @@ app.post("/api/club/register", async (req, res) => {
 
     res.status(201).json({
       message: "Registration submitted successfully! Check your email.",
-      registrationId: registration._id,
+      registrationId: registration._id.toString(),
     });
   } catch (err) {
     console.error("Club registration error:", err);
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ error: err.message });
+    }
     res.status(500).json({ error: "Failed to submit registration" });
   }
 });
 
-// 2. Get all pending club registrations (for admin)
+// 2. Get all club registrations (for admin)
 app.get("/api/admin/club-registrations", async (req, res) => {
   try {
-    const registrations = await ClubRegistration.find()
+    const registrations = await Clubs.find()
       .sort({ appliedAt: -1 })
       .select("-__v");
 
@@ -1111,19 +1208,21 @@ app.get("/api/admin/club-registrations", async (req, res) => {
   }
 });
 
-// 3. Admin: Approve/Reject club registration
+// 3. Admin: Approve or Reject registration
 app.patch("/api/admin/club-registration/:id", async (req, res) => {
   const { status } = req.body; // "approved" or "rejected"
 
   if (!["approved", "rejected"].includes(status)) {
-    return res.status(400).json({ error: "Invalid status" });
+    return res
+      .status(400)
+      .json({ error: "Invalid status. Use 'approved' or 'rejected'" });
   }
 
   try {
-    const registration = await ClubRegistration.findByIdAndUpdate(
+    const registration = await Clubs.findByIdAndUpdate(
       req.params.id,
       { status },
-      { new: true }
+      { new: true, runValidators: true }
     );
 
     if (!registration) {
@@ -1142,17 +1241,129 @@ app.patch("/api/admin/club-registration/:id", async (req, res) => {
         }</strong> has been <strong>${status}</strong>!</p>
         ${
           status === "approved"
-            ? "<p>Congratulations! You are now officially a member.</p>"
+            ? "<p><strong>Congratulations!</strong> You are now officially a member.</p>"
             : "<p>Sorry, your application was not approved this time.</p>"
         }
+        <p>LRN: ${registration.lrn}</p>
         <p>Thank you for your interest!</p>
       `,
     });
 
-    res.json({ message: `Registration ${status}`, registration });
+    res.json({
+      message: `Registration ${status} successfully`,
+      registration,
+    });
   } catch (err) {
     console.error("Update club registration error:", err);
     res.status(500).json({ error: "Failed to update status" });
+  }
+});
+
+app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
+  try {
+    const totalRegistrations = await Clubs.countDocuments();
+
+    // Count per club (group by club field)
+    const byClub = await Clubs.aggregate([
+      {
+        $group: {
+          _id: "$club",
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $project: {
+          club: "$_id",
+          count: 1,
+          _id: 0,
+        },
+      },
+    ]);
+
+    // Convert to object for easy frontend use
+    const byClubObj = byClub.reduce((acc, item) => {
+      acc[item.club] = item.count;
+      return acc;
+    }, {});
+
+    res.json({
+      totalRegistrations,
+      byClub: byClubObj,
+    });
+  } catch (err) {
+    console.error("Dashboard stats error:", err);
+    res.status(500).json({ error: "Failed to load registration stats" });
+  }
+});
+
+app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
+  try {
+    // Total registrations (all statuses)
+    const totalRegistrations = await Clubs.countDocuments();
+
+    // Breakdown per club with status counts
+    const byClub = await Clubs.aggregate([
+      {
+        $group: {
+          _id: "$club",
+          total: { $sum: 1 },
+          pending: {
+            $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] },
+          },
+          approved: {
+            $sum: { $cond: [{ $eq: ["$status", "approved"] }, 1, 0] },
+          },
+          rejected: {
+            $sum: { $cond: [{ $eq: ["$status", "rejected"] }, 1, 0] },
+          },
+        },
+      },
+      {
+        $project: {
+          club: "$_id",
+          total: 1,
+          pending: 1,
+          approved: 1,
+          rejected: 1,
+          _id: 0,
+        },
+      },
+      {
+        $sort: { total: -1 }, // Highest total first
+      },
+    ]);
+
+    // Convert to friendly object format for frontend
+    const byClubObj = byClub.reduce((acc, item) => {
+      acc[item.club] = {
+        total: item.total,
+        pending: item.pending,
+        approved: item.approved,
+        rejected: item.rejected,
+      };
+      return acc;
+    }, {});
+
+    // Also compute global totals
+    const globalTotals = byClub.reduce(
+      (acc, item) => ({
+        total: acc.total + item.total,
+        pending: acc.pending + item.pending,
+        approved: acc.approved + item.approved,
+        rejected: acc.rejected + item.rejected,
+      }),
+      { total: 0, pending: 0, approved: 0, rejected: 0 }
+    );
+
+    res.json({
+      totalRegistrations,
+      byClub: byClubObj,
+      global: globalTotals, // Optional: total breakdown across all clubs
+      lastUpdated: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Dashboard registration stats error:", err);
+    res.status(500).json({ error: "Failed to load registration stats" });
   }
 });
 // Server
