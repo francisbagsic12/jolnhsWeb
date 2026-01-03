@@ -13,7 +13,7 @@ app.use(
       "http://localhost:3000",
       "http://localhost:5173",
       "https://jolnhs-admin-control.netlify.app",
-      "https://jolnhswebpage.netlify.app/",
+      "https://jolnhswebpage.netlify.app",
     ],
     credentials: true,
   })
@@ -56,8 +56,26 @@ mongoose
 
 // ==================== MODELS ====================
 
-// === NEW: Permanent archive ng votes pagkatapos ng election ===
+// NEW: Permanent archive ng votes pagkatapos ng election ===
+// Announcement Schema
+const announcementSchema = new mongoose.Schema(
+  {
+    text: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    active: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
 
+const Announcement = mongoose.model("Announcement", announcementSchema);
 const clubRegistrationSchema = new mongoose.Schema({
   email: { type: String, required: true, lowercase: true },
   lrn: { type: String, required: true },
@@ -93,13 +111,13 @@ const historicalVoteSchema = new mongoose.Schema({
     required: true,
   },
 
-  // Optional: para mas madaling i-audit
   totalCandidatesVoted: { type: Number },
   electionTitle: String, // e.g. "December 2025 SSG Election"
 });
 const winnerSchema = new mongoose.Schema({
   electionId: { type: String, required: true, unique: true, index: true },
   electionTitle: { type: String, required: true },
+  votingStart: { type: Date },
   completedAt: { type: Date, default: Date.now },
   winners: [
     {
@@ -513,35 +531,50 @@ app.delete("/api/admin/candidate/:id", async (req, res) => {
 // FIXED: Election periods endpoint (no crash even if no data)
 app.get("/api/admin/election-periods", async (req, res) => {
   try {
-    // Get from votes (current + past)
     let elections = await Vote.distinct("electionId");
-    // Also get from archived results (even more reliable)
-    const archived = await ElectionResult.distinct("electionId");
+    const archived = await Winner.distinct("electionId");
     elections = [...new Set([...elections, ...archived])];
 
     const safeElections = elections.filter(
       (id) => id && typeof id === "string" && id.startsWith("election-")
     );
 
-    const periods = safeElections
-      .map((id) => {
-        const [year, month] = id.replace("election-", "").split("-");
-        const date = new Date(parseInt(year), parseInt(month) - 1, 1);
-        return {
-          id,
-          label:
-            date.toLocaleDateString("en-PH", {
-              year: "numeric",
-              month: "long",
-            }) + " Election",
-          date: date.toLocaleDateString("en-PH", {
-            year: "numeric",
+    const periods = await Promise.all(
+      safeElections.map(async (id) => {
+        const winner = await Winner.findOne({ electionId: id });
+
+        let displayDate = "Date not set";
+        let startDateISO = null;
+
+        if (winner?.votingStart) {
+          const start = new Date(winner.votingStart);
+          displayDate = start.toLocaleDateString("en-PH", {
             month: "long",
             day: "numeric",
-          }),
+            year: "numeric",
+          });
+          startDateISO = start.toISOString().split("T")[0];
+        } else {
+          // Fallback kapag wala pang votingStart (old elections)
+          const [year, month] = id.replace("election-", "").split("-");
+          const dateObj = new Date(parseInt(year), parseInt(month) - 1, 1);
+          displayDate = dateObj.toLocaleDateString("en-PH", {
+            month: "long",
+            year: "numeric",
+          });
+        }
+
+        return {
+          id,
+          label: `${displayDate} Election`,
+          date: displayDate,
+          startDate: startDateISO, // para ma-filter o ma-sort kung gusto mo sa frontend
         };
       })
-      .sort((a, b) => b.id.localeCompare(a.id));
+    );
+
+    // Sort newest first
+    periods.sort((a, b) => b.id.localeCompare(a.id));
 
     res.json({ periods });
   } catch (err) {
@@ -716,7 +749,6 @@ app.post("/api/admin/stop-voting", async (req, res) => {
       { upsert: true }
     );
 
-    // 5. Optional: Keep old ElectionResult if you still want it
     await ElectionResult.findOneAndUpdate(
       { electionId },
       {
@@ -841,7 +873,7 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
     const startDate = new Date(start);
     const endDate = new Date(end);
 
-    if (isNaN(startDate) || isNaN(endDate)) {
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
       return res.status(400).json({ error: "Invalid date format" });
     }
 
@@ -853,6 +885,14 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
 
     const electionId = generateElectionId(startDate);
 
+    // Siguraduhing walang existing active election na pareho ang ID
+    const existing = await Winner.findOne({ electionId });
+    if (existing) {
+      return res.status(400).json({
+        error: `Election ${electionId} already exists. Cannot create duplicate.`,
+      });
+    }
+
     // Reset voters for this new election only
     await Voter.updateMany(
       { electionId },
@@ -861,20 +901,24 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
           hasVoted: false,
           votedAt: null,
           voteChoices: new Map(),
+          electionId: electionId,
         },
       }
     );
 
-    // Move candidates from temp to new election
-    await Candidate.updateMany(
+    // Move candidates from temp to this new election
+    const movedCount = await Candidate.updateMany(
       { electionId: "temp-pre-election" },
       { $set: { electionId } }
     );
+    console.log(
+      `Moved ${movedCount.modifiedCount} candidates to ${electionId}`
+    );
 
-    // Reset vote counts
+    // Reset vote counts for this election
     await Vote.deleteMany({ electionId });
 
-    // Update settings
+    // Update election settings (current active election)
     await ElectionSettings.findOneAndUpdate(
       {},
       {
@@ -883,16 +927,37 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
         votingEnd: endDate,
         isVotingActive: true,
       },
-      { upsert: true }
+      { upsert: true, new: true }
+    );
+
+    // **BAGONG RECORD** sa Winner collection — hindi update, bagong entry
+    const newWinnerRecord = new Winner({
+      electionId,
+      electionTitle: `SSG Election ${electionId.replace("election-", "")}`,
+      votingStart: startDate, // eksaktong start date
+      completedAt: null, // ise-set pag end voting
+      winners: [], // wala pa
+      totalVotes: 0,
+    });
+
+    await newWinnerRecord.save();
+
+    console.log(
+      `Created new Winner record for ${electionId} with votingStart: ${startDate}`
     );
 
     res.json({
-      message: `New election started: ${electionId}`,
+      message: `New election started successfully`,
       electionId,
+      votingStart: startDate.toISOString(),
+      votingEnd: endDate.toISOString(),
     });
   } catch (err) {
     console.error("Set voting period error:", err);
-    res.status(500).json({ error: "Failed to start election" });
+    res.status(500).json({
+      error: "Failed to start election",
+      details: err.message,
+    });
   }
 });
 app.get("/api/admin/wwinnerResult/:electedId", async (req, res) => {
@@ -1049,7 +1114,6 @@ app.post(
     const normalizedEmail = email.toLowerCase();
 
     try {
-      // Optional: Check if already registered (to prevent spam)
       const existing = await Clubs.findOne({
         email: normalizedEmail,
       });
@@ -1135,7 +1199,6 @@ app.post("/api/club/register", async (req, res) => {
     return res.status(400).json({ error: "Only Gmail addresses allowed" });
   }
 
-  // Optional: Basic LRN validation (12 digits)
   if (!/^\d{12}$/.test(lrn)) {
     return res.status(400).json({ error: "LRN must be exactly 12 digits" });
   }
@@ -1259,42 +1322,42 @@ app.patch("/api/admin/club-registration/:id", async (req, res) => {
   }
 });
 
-app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
-  try {
-    const totalRegistrations = await Clubs.countDocuments();
+// app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
+//   try {
+//     const totalRegistrations = await Clubs.countDocuments();
 
-    // Count per club (group by club field)
-    const byClub = await Clubs.aggregate([
-      {
-        $group: {
-          _id: "$club",
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $project: {
-          club: "$_id",
-          count: 1,
-          _id: 0,
-        },
-      },
-    ]);
+//     // Count per club (group by club field)
+//     const byClub = await Clubs.aggregate([
+//       {
+//         $group: {
+//           _id: "$club",
+//           count: { $sum: 1 },
+//         },
+//       },
+//       {
+//         $project: {
+//           club: "$_id",
+//           count: 1,
+//           _id: 0,
+//         },
+//       },
+//     ]);
 
-    // Convert to object for easy frontend use
-    const byClubObj = byClub.reduce((acc, item) => {
-      acc[item.club] = item.count;
-      return acc;
-    }, {});
+//     // Convert to object for easy frontend use
+//     const byClubObj = byClub.reduce((acc, item) => {
+//       acc[item.club] = item.count;
+//       return acc;
+//     }, {});
 
-    res.json({
-      totalRegistrations,
-      byClub: byClubObj,
-    });
-  } catch (err) {
-    console.error("Dashboard stats error:", err);
-    res.status(500).json({ error: "Failed to load registration stats" });
-  }
-});
+//     res.json({
+//       totalRegistrations,
+//       byClub: byClubObj,
+//     });
+//   } catch (err) {
+//     console.error("Dashboard stats error:", err);
+//     res.status(500).json({ error: "Failed to load registration stats" });
+//   }
+// });
 
 app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
   try {
@@ -1358,12 +1421,63 @@ app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
     res.json({
       totalRegistrations,
       byClub: byClubObj,
-      global: globalTotals, // Optional: total breakdown across all clubs
+      global: globalTotals,
       lastUpdated: new Date().toISOString(),
     });
   } catch (err) {
     console.error("Dashboard registration stats error:", err);
     res.status(500).json({ error: "Failed to load registration stats" });
+  }
+});
+
+// POST /api/admin/announcement - Mag-post ng bagong announcement
+app.post("/api/admin/announcement", async (req, res) => {
+  const { text } = req.body;
+
+  if (!text || typeof text !== "string" || text.trim().length === 0) {
+    return res.status(400).json({ error: "Announcement text is required" });
+  }
+
+  try {
+    // Gumawa ng bagong announcement (hindi update)
+    const newAnnouncement = new Announcement({
+      text: text.trim(),
+      createdAt: new Date(),
+      active: true,
+      // createdBy: req.user?.id || "admin" // kung may auth
+    });
+
+    await newAnnouncement.save();
+
+    // Optional: I-deactivate ang previous active announcements kung gusto mo lang 1 active
+    // await Announcement.updateMany(
+    //   { active: true, _id: { $ne: newAnnouncement._id } },
+    //   { $set: { active: false } }
+    // );
+
+    res.json({
+      message: "Announcement published successfully",
+      announcement: newAnnouncement,
+    });
+  } catch (err) {
+    console.error("Error publishing announcement:", err);
+    res.status(500).json({ error: "Failed to save announcement" });
+  }
+});
+
+app.get("/api/announcement", async (req, res) => {
+  try {
+    const latest = await Announcement.findOne({ active: true })
+      .sort({ createdAt: -1 })
+      .select("text createdAt");
+
+    res.json({
+      text: latest?.text || "",
+      createdAt: latest?.createdAt || null,
+    });
+  } catch (err) {
+    console.error("Error fetching announcement:", err);
+    res.status(500).json({ text: "" });
   }
 });
 // Server
