@@ -13,7 +13,7 @@ app.use(
       "http://localhost:3000",
       "http://localhost:5173",
       "https://jolnhs-admin-control.netlify.app",
-      "https://jolnhswebpage.netlify.app",
+      "https://jolnhs-e-voting.netlify.app",
     ],
     credentials: true,
   }),
