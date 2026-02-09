@@ -16,7 +16,7 @@ app.use(
       "https://jolnhswebpage.netlify.app",
     ],
     credentials: true,
-  })
+  }),
 );
 app.use(express.json());
 
@@ -38,7 +38,6 @@ const clubVerificationLimiter = rateLimit({
 const clubVerificationCodes = new Map();
 // Log every incoming request (great for debugging)
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
 
@@ -72,7 +71,7 @@ const announcementSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 const Announcement = mongoose.model("Announcement", announcementSchema);
@@ -119,6 +118,8 @@ const winnerSchema = new mongoose.Schema({
   electionTitle: { type: String, required: true },
   votingStart: { type: Date },
   completedAt: { type: Date, default: Date.now },
+  isShown: { type: Boolean, default: false }, // Track if winners are currently displayed
+  shownAt: { type: Date }, // When winners were last shown
   winners: [
     {
       position: { type: String, required: true },
@@ -151,7 +152,7 @@ const voterSchema = new mongoose.Schema(
     },
     electionId: String, // null = pre-registration, set on vote
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Unique constraint: same email/LRn can exist in different elections
@@ -181,7 +182,7 @@ const voteSchema = new mongoose.Schema({
 
 voteSchema.index(
   { electionId: 1, position: 1, candidateId: 1 },
-  { unique: true }
+  { unique: true },
 );
 
 const candidateSchema = new mongoose.Schema({
@@ -230,7 +231,7 @@ const Winner = mongoose.model("Winner", winnerSchema);
 const Clubs = mongoose.model("Clubs", clubRegistrationSchema);
 const ElectionSettings = mongoose.model(
   "ElectionSettings",
-  electionSettingsSchema
+  electionSettingsSchema,
 );
 // ==================== NODEMAILER ====================
 const transporter = nodemailer.createTransport({
@@ -248,7 +249,9 @@ const verificationCodes = new Map();
 function generateElectionId(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `election-${year}-${month}`;
+  const day = String(date.getDate()); // ← FIXED: getDate() for day of month (1-31), not getDay() (0-6 weekday)
+  console.log(day);
+  return `election-${year}-${month}-${day}`;
 }
 
 function getPositionLabel(pos) {
@@ -275,8 +278,11 @@ app.post("/api/send-verification", async (req, res) => {
 
   try {
     const normalized = email.toLowerCase();
+    // Only block if the voter has already voted in the CURRENT election
+    const settings = await ElectionSettings.findOne({});
+    const currentElectionId = settings?.currentElectionId;
     const voter = await Voter.findOne({ email: normalized });
-    if (voter?.hasVoted) {
+    if (voter?.hasVoted && voter.electionId === currentElectionId) {
       return res.status(403).json({ error: "You have already voted" });
     }
 
@@ -381,17 +387,18 @@ app.post("/api/submit-vote", async (req, res) => {
   } = req.body;
 
   try {
-    const voter = await Voter.findOne({ email: email.toLowerCase(), lrn });
-    if (!voter || voter.hasVoted) {
-      return res.status(403).json({ error: "Invalid or already voted" });
-    }
-
     const settings = await ElectionSettings.findOne({});
     if (!settings?.isVotingActive || !settings.currentElectionId) {
       return res.status(403).json({ error: "Voting is closed" });
     }
 
     const electionId = settings.currentElectionId;
+
+    const voter = await Voter.findOne({ email: email.toLowerCase(), lrn });
+    // Only block if the voter has already voted in the CURRENT election
+    if (!voter || (voter.hasVoted && voter.electionId === electionId)) {
+      return res.status(403).json({ error: "Invalid or already voted" });
+    }
 
     // Update voter
     voter.voteChoices = new Map([
@@ -435,7 +442,7 @@ app.post("/api/submit-vote", async (req, res) => {
         await Vote.findOneAndUpdate(
           { electionId, position: pos, candidateId: cand },
           { $inc: { count: 1 } },
-          { upsert: true }
+          { upsert: true },
         );
       }
     }
@@ -454,6 +461,8 @@ app.get("/api/admin/candidates", async (req, res) => {
     const candidates = await Candidate.find({ electionId }).sort({
       position: 1,
     });
+    console.log(candidates, electionId);
+
     res.json(candidates);
   } catch (err) {
     res.status(500).json({ error: "Failed to load candidates" });
@@ -490,7 +499,7 @@ app.post("/api/admin/candidate", async (req, res) => {
         team, // <--- NADAGDAG NA ITO
         party: party || "",
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
 
     res.json({ message: "Candidate added successfully", candidate });
@@ -499,7 +508,31 @@ app.post("/api/admin/candidate", async (req, res) => {
     res.status(500).json({ error: "Failed to add candidate" });
   }
 });
+app.delete(
+  "/api/admin/deleteAllCandidatesONTime/:electionIdss",
+  async (req, res) => {
+    try {
+      const { electionIdss } = req.params;
+      const electionId = "election-" + electionIdss.substring(0, 10);
+      console.log("deleted ID:", electionId);
+      if (!electionId) {
+        return res.status(400).json({ error: "Election ID is required" });
+      }
 
+      const deleted = await Candidate.deleteMany({ electionId });
+      await Vote.deleteMany({ electionId });
+
+      res.json({
+        message: `Deleted ${deleted.deletedCount} candidates and their votes`,
+      });
+    } catch (err) {
+      console.error("Delete all candidates error:", err);
+      res
+        .status(500)
+        .json({ error: "Failed to delete all candidates: " + err.message });
+    }
+  },
+);
 // Delete candidate
 app.delete("/api/admin/candidate/:id", async (req, res) => {
   try {
@@ -536,7 +569,7 @@ app.get("/api/admin/election-periods", async (req, res) => {
     elections = [...new Set([...elections, ...archived])];
 
     const safeElections = elections.filter(
-      (id) => id && typeof id === "string" && id.startsWith("election-")
+      (id) => id && typeof id === "string" && id.startsWith("election-"),
     );
 
     const periods = await Promise.all(
@@ -570,7 +603,7 @@ app.get("/api/admin/election-periods", async (req, res) => {
           date: displayDate,
           startDate: startDateISO, // para ma-filter o ma-sort kung gusto mo sa frontend
         };
-      })
+      }),
     );
 
     // Sort newest first
@@ -600,8 +633,8 @@ app.get("/api/admin/results", async (req, res) => {
 
     const formatted = results.map((r) => ({
       position: r.position,
-      candidateId: r.candidate,
-      candidateName: candidateMap[r.candidate] || r.candidate,
+      candidateId: r.candidateId, // FIXED: r.candidate -> r.candidateId (assuming typo in code)
+      candidateName: candidateMap[r.candidateId] || r.candidateId,
       voteCount: r.count,
     }));
 
@@ -622,7 +655,7 @@ app.get("/api/admin/elections", async (req, res) => {
 app.get("/api/admin/vote-details/:id", async (req, res) => {
   try {
     const voter = await Voter.findById(req.params.id).select(
-      "voteChoices fullName"
+      "voteChoices fullName",
     );
     if (!voter || !voter.voteChoices)
       return res.status(404).json({ error: "No vote found." });
@@ -696,7 +729,7 @@ app.post("/api/admin/stop-voting", async (req, res) => {
     const voteRecords = await Vote.find({ electionId });
     const totalVotes = voteRecords.reduce((sum, v) => sum + v.count, 0);
 
-    // 2. Candidate mapping
+    // // 2. Candidate mapping
     const candidates = await Candidate.find({ electionId });
     const candidateMap = {};
     candidates.forEach((c) => {
@@ -746,7 +779,7 @@ app.post("/api/admin/stop-voting", async (req, res) => {
         winners: winnersList,
         totalVotes,
       },
-      { upsert: true }
+      { upsert: true },
     );
 
     await ElectionResult.findOneAndUpdate(
@@ -759,7 +792,7 @@ app.post("/api/admin/stop-voting", async (req, res) => {
         results: winnersList,
         totalVotes,
       },
-      { upsert: true }
+      { upsert: true },
     );
 
     // 6. Archive voter votes (from previous instructions)
@@ -786,20 +819,20 @@ app.post("/api/admin/stop-voting", async (req, res) => {
         });
 
         console.log(
-          `Successfully archived ${result.insertedCount} new voter records`
+          `Successfully archived ${result.insertedCount} new voter records`,
         );
         if (result.insertedCount < archived.length) {
           console.log(
             `Skipped ${
               archived.length - result.insertedCount
-            } duplicate records`
+            } duplicate records`,
           );
         }
       } catch (bulkErr) {
         if (bulkErr.code === 11000) {
           // Normal lang 'to kapag may duplicates
           console.log(
-            "Some records already exist in historicalvotes (duplicates skipped)"
+            "Some records already exist in historicalvotes (duplicates skipped)",
           );
         } else {
           console.error("Bulk archive error:", bulkErr);
@@ -809,7 +842,10 @@ app.post("/api/admin/stop-voting", async (req, res) => {
     }
 
     // 7. Stop voting
-    await ElectionSettings.updateOne({}, { isVotingActive: false });
+    await ElectionSettings.updateOne(
+      {},
+      { isVotingActive: false, currentElectionId: "" },
+    );
 
     res.json({
       message: "Voting ended! Winners archived & voter records saved.",
@@ -862,9 +898,11 @@ app.get("/api/admin/past-results/:electionId", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch past results" });
   }
 });
-app.post("/api/admin/set-voting-period", async (req, res) => {
+app.post("/api/admin/set-voting-period/:electionIdState", async (req, res) => {
   const { start, end } = req.body;
-
+  const { electionIdState } = req.params;
+  const electionId = "election-" + electionIdState.substring(0, 10);
+  console.log("Starting new election with ID:", electionId);
   if (!start || !end) {
     return res.status(400).json({ error: "Start and end dates are required" });
   }
@@ -883,7 +921,7 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
         .json({ error: "End date must be after start date" });
     }
 
-    const electionId = generateElectionId(startDate);
+    // const electionId = generateElectionId(startDate);
 
     // Siguraduhing walang existing active election na pareho ang ID
     const existing = await Winner.findOne({ electionId });
@@ -903,16 +941,16 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
           voteChoices: new Map(),
           electionId: electionId,
         },
-      }
+      },
     );
 
     // Move candidates from temp to this new election
     const movedCount = await Candidate.updateMany(
       { electionId: "temp-pre-election" },
-      { $set: { electionId } }
+      { $set: { electionId } },
     );
     console.log(
-      `Moved ${movedCount.modifiedCount} candidates to ${electionId}`
+      `Moved ${movedCount.modifiedCount} candidates to ${electionId}`,
     );
 
     // Reset vote counts for this election
@@ -927,7 +965,7 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
         votingEnd: endDate,
         isVotingActive: true,
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
 
     // **BAGONG RECORD** sa Winner collection — hindi update, bagong entry
@@ -943,7 +981,7 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
     await newWinnerRecord.save();
 
     console.log(
-      `Created new Winner record for ${electionId} with votingStart: ${startDate}`
+      `Created new Winner record for ${electionId} with votingStart: ${startDate}`,
     );
 
     res.json({
@@ -962,31 +1000,48 @@ app.post("/api/admin/set-voting-period", async (req, res) => {
 });
 app.get("/api/admin/wwinnerResult/:electedId", async (req, res) => {
   const currentOfficer = await Winner.findOne({
-    elecltionId: req.params.electionId,
+    electionId: req.params.electedId, // FIXED: elecltionId -> electionId, and param is electedId
   })
-    .sort({ votedAt: -1 })
-    .select("-__v -voteChoices._id"); // exclude unnecessary fields
+    .sort({ completedAt: -1 }) // FIXED: votedAt -> completedAt (based on schema)
+    .select("-__v"); // exclude __v
 
-  res.status(200).json({ msg: currentOfficer });
+  if (!currentOfficer) {
+    return res.status(404).json({ error: "No winner found" });
+  }
+
+  res.status(200).json(currentOfficer); // FIXED: { msg: currentOfficer } -> currentOfficer
 }); // =============================================
 //  NEW: Get current election winners (para sa "current" option)
 // =============================================
 app.get("/api/admin/winners", async (req, res) => {
   try {
-    const settings = await ElectionSettings.findOne({});
-    if (!settings?.currentElectionId) {
-      return res.json({ winners: [], totalVotes: 0 });
-    }
+    // const settings = await ElectionSettings.findOne({});
+    // if (!settings?.currentElectionId) {
+    //   return res.json({
+    //     winners: [],
+    //     totalVotes: 0,
+    //     isShown: false,
+    //     electionId: null,
+    //     electionTitle: null,
+    //     completedAt: null,
+    //     shownAt: null,
+    //   });
+    // }
 
     const winnerDoc = await Winner.findOne({
-      electionId: settings.currentElectionId,
+      isShown: true,
     });
-
+    console.log(winnerDoc);
     if (!winnerDoc) {
-      // Kung wala pa (ongoing pa ang election), balik ng empty
+      // Kung wala pa (ongoing pa ang election), balik ng empty with isShown: false
       return res.json({
         winners: [],
         totalVotes: 0,
+        electionId: null,
+        electionTitle: null,
+        completedAt: null,
+        isShown: false,
+        shownAt: null,
         message: "Election ongoing or no results yet",
       });
     }
@@ -996,6 +1051,9 @@ app.get("/api/admin/winners", async (req, res) => {
       totalVotes: winnerDoc.totalVotes,
       electionId: winnerDoc.electionId,
       electionTitle: winnerDoc.electionTitle,
+      completedAt: winnerDoc.completedAt,
+      isShown: winnerDoc.isShown,
+      shownAt: winnerDoc.shownAt,
     });
   } catch (err) {
     console.error("Error fetching current winners:", err);
@@ -1021,10 +1079,63 @@ app.get("/api/admin/winners/:electionId", async (req, res) => {
       electionId: winnerDoc.electionId,
       electionTitle: winnerDoc.electionTitle,
       completedAt: winnerDoc.completedAt,
+      isShown: winnerDoc.isShown,
+      shownAt: winnerDoc.shownAt,
     });
   } catch (err) {
     console.error("Error fetching past winners:", err);
     res.status(500).json({ error: "Failed to load election results" });
+  }
+});
+
+// Toggle winners display status (only ONE election can be shown at a time)
+app.put("/api/admin/winners/:electionId/toggle-show", async (req, res) => {
+  try {
+    const { electionId } = req.params;
+    const winnerDoc = await Winner.findOne({ electionId });
+
+    if (!winnerDoc) {
+      return res.status(404).json({
+        error: "No results found for this election",
+      });
+    }
+
+    // If showing winners for this election, hide all others first
+    if (!winnerDoc.isShown) {
+      // Want to SHOW this election
+      // Step 1: Hide all others
+      await Winner.updateMany(
+        { electionId: { $ne: electionId } },
+        { $set: { isShown: false } },
+      );
+      console.log(`Hidden all other elections, now showing ${electionId}`);
+
+      // Step 2: Show this one
+      winnerDoc.isShown = true;
+      winnerDoc.shownAt = new Date();
+      await winnerDoc.save();
+
+      res.json({
+        success: true,
+        isShown: true,
+        electionId,
+        message: `Winners from ${electionId} are now shown (all others hidden)`,
+      });
+    } else {
+      // Want to HIDE this election
+      winnerDoc.isShown = false;
+      await winnerDoc.save();
+
+      res.json({
+        success: true,
+        isShown: false,
+        electionId,
+        message: "Winners are now hidden",
+      });
+    }
+  } catch (err) {
+    console.error("Error toggling winners display:", err);
+    res.status(500).json({ error: "Failed to toggle winners display" });
   }
 });
 
@@ -1079,8 +1190,9 @@ app.get("/api/admin/dashboard-voting-stats", async (req, res) => {
     const votes = await Vote.find({ electionId }).sort({ count: -1 });
 
     votes.forEach((v) => {
-      if (byPosition[v.position]) {
-        byPosition[v.position].push({
+      if (byPosition[getPositionLabel(v.position)]) {
+        // FIXED: use positionLabel
+        byPosition[getPositionLabel(v.position)].push({
           name: v.candidateId, // Pwede mo palitan ng real name via Candidate lookup
           votes: v.count,
         });
@@ -1152,7 +1264,7 @@ app.post(
       console.error("Club send-verification error:", err);
       res.status(500).json({ error: "Failed to send verification code" });
     }
-  }
+  },
 );
 
 // 2. Verify code for club registration
@@ -1285,7 +1397,7 @@ app.patch("/api/admin/club-registration/:id", async (req, res) => {
     const registration = await Clubs.findByIdAndUpdate(
       req.params.id,
       { status },
-      { new: true, runValidators: true }
+      { new: true, runValidators: true },
     );
 
     if (!registration) {
@@ -1338,10 +1450,10 @@ app.patch("/api/admin/club-registration/:id", async (req, res) => {
 //         $project: {
 //           club: "$_id",
 //           count: 1,
-//           _id: 0,
-//         },
-//       },
-//     ]);
+//        _id: 0,
+//      },
+//    },
+//  ]);
 
 //     // Convert to object for easy frontend use
 //     const byClubObj = byClub.reduce((acc, item) => {
@@ -1415,7 +1527,7 @@ app.get("/api/admin/dashboard-registration-stats", async (req, res) => {
         approved: acc.approved + item.approved,
         rejected: acc.rejected + item.rejected,
       }),
-      { total: 0, pending: 0, approved: 0, rejected: 0 }
+      { total: 0, pending: 0, approved: 0, rejected: 0 },
     );
 
     res.json({
