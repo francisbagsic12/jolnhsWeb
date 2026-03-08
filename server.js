@@ -1221,14 +1221,17 @@ app.post(
     const { email } = req.body;
 
     if (!email || !email.toLowerCase().endsWith("@gmail.com")) {
-      return res.status(400).json({ error: "Only Gmail addresses are allowed" });
+      return res
+        .status(400)
+        .json({ error: "Only Gmail addresses are allowed" });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = email.toLowerCase();
 
     try {
-      // Check if already approved
-      const existing = await Clubs.findOne({ email: normalizedEmail });
+      const existing = await Clubs.findOne({
+        email: normalizedEmail,
+      });
       if (existing && existing.status === "approved") {
         return res.status(403).json({
           error: "You are already an approved member of this club.",
@@ -1238,10 +1241,10 @@ app.post(
       // Generate 6-digit code
       const code = Math.floor(100000 + Math.random() * 900000).toString();
 
-      // Store in Map (with expiry)
+      // Store with 10-min expiry
       clubVerificationCodes.set(normalizedEmail, {
         code,
-        expires: Date.now() + 10 * 60 * 1000, // 10 minutes
+        expires: Date.now() + 10 * 60 * 1000,
       });
 
       // Send email
@@ -1257,18 +1260,14 @@ app.post(
         `,
       });
 
-      console.log(`✅ Club OTP sent to ${normalizedEmail}: ${code}`);
+      console.log(`Club OTP sent to ${normalizedEmail}: ${code}`);
+
       res.json({ message: "Verification code sent! Check your email." });
     } catch (err) {
-      console.error("🚨 Club send-verification ERROR:", err.message);
-      console.error("Full error:", err);
-
-      // Important: huwag ibalik ang full error sa user (security)
-      res.status(500).json({
-        error: "Failed to send verification code. Please try again later.",
-      });
+      console.error("Club send-verification error:", err);
+      res.status(500).json({ error: "Failed to send verification code" });
     }
-  }
+  },
 );
 
 // 2. Verify code for club registration
