@@ -239,7 +239,7 @@ const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: "hugobayani@gmail.com",
-    pass: "maqryoxbwzzpfdcv",
+    pass: "bfjwjeinfmcwwqzp",
   },
   tls: { rejectUnauthorized: false },
 });
