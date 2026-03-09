@@ -10,11 +10,10 @@ const app = express();
 app.use(
   cors({
     origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
       "https://jolnhs-admin-control.netlify.app",
       "https://jolnhs-e-voting.netlify.app",
-      "https://jolnhsweb.onrender.com"
-     
-      
     ],
     credentials: true,
   }),
@@ -236,16 +235,10 @@ const ElectionSettings = mongoose.model(
 );
 // ==================== NODEMAILER ====================
 const transporter = nodemailer.createTransport({
-host: "smtp.gmail.com",
-  port: 587,                    
-  secure: false,                
-  requireTLS: true,             
-  connectionTimeout: 10000,     
-  greetingTimeout: 10000,
-  socketTimeout: 10000,
+  service: "gmail",
   auth: {
     user: "hugobayani@gmail.com",
-    pass: "bfjwjeinfmcwwqzp",   // Your app password (confirm it's still valid!)
+    pass: "bfjwjeinfmcwwqzp",
   },
   tls: { rejectUnauthorized: false },
 });
@@ -475,30 +468,7 @@ app.get("/api/admin/candidates", async (req, res) => {
     res.status(500).json({ error: "Failed to load candidates" });
   }
 });
-app.get("/api/test-smtp", async (req, res) => {
-  const net = require("net");
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    socket.setTimeout(8000);
 
-    socket.on("connect", () => {
-      socket.destroy();
-      res.json({ status: "connected", message: "Outbound port 587 allowed" });
-    });
-
-    socket.on("error", (err) => {
-      socket.destroy();
-      res.status(500).json({ status: "failed", error: err.message, code: err.code });
-    });
-
-    socket.on("timeout", () => {
-      socket.destroy();
-      res.status(500).json({ status: "timeout", message: "Connection timed out (likely blocked)" });
-    });
-
-    socket.connect(587, "smtp.gmail.com");
-  });
-});
 // Add candidate (NOW REQUIRES TEAM)
 app.post("/api/admin/candidate", async (req, res) => {
   const { position, candidateId, name, team, party } = req.body;
@@ -1241,7 +1211,6 @@ app.get("/api/admin/dashboard-voting-stats", async (req, res) => {
   }
 });
 
-// ==================== CLUB VERIFICATION ROUTE (FIXED) ====================
 app.post(
   "/api/club/send-verification",
   clubVerificationLimiter,
