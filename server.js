@@ -236,7 +236,7 @@ const ElectionSettings = mongoose.model(
 );
 // ==================== NODEMAILER ====================
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  service: "smtp.gmail.com",
   auth: {
     user: "hugobayani@gmail.com",
     pass: "bfjwjeinfmcwwqzp",
