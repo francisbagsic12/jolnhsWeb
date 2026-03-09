@@ -241,8 +241,8 @@ const transporter = nodemailer.createTransport({
   secure: false,
   requireTLS: true,
   auth: {
-    user: "hugobayani@gmail.com",
-    pass: "whqwotnlcgosvfpi",
+    user: process.env.EMAIL_USER || "hugobayani@gmail.com",
+    pass: process.env.EMAIL_PASS || "whqwotnlcgosvfpi",
   },
   tls: {
     rejectUnauthorized: false,
@@ -251,26 +251,59 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: 10000,
   socketTimeout: 10000,
   pool: {
-    maxConnections: 5,
-    maxMessages: 100,
-    rateDelta: 4000,
-    rateLimit: 14,
+    maxConnections: 3,
+    maxMessages: 50,
+    rateDelta: 2000,
+    rateLimit: 5,
   },
+  maxConnections: 3,
+  maxMessages: 50,
 });
 
-// Test connection on startup
+// Test connection on startup (non-blocking)
+console.log("📧 Email transporter initializing with:", {
+  user: process.env.EMAIL_USER || "hugobayani@gmail.com",
+  configured: !!process.env.EMAIL_PASS,
+});
+
 transporter.verify((error, success) => {
   if (error) {
     console.warn(
-      "⚠️  Email transporter not configured properly:",
+      "⚠️  Email transporter connection warning:",
+      error.code,
       error.message,
     );
   } else {
-    console.log("✅ Email transporter ready");
+    console.log("✅ Email transporter verified successfully");
   }
+}).catch((err) => {
+  // Catch promise rejection if verify fails
+  console.warn("⚠️  Email verification error:", err.message);
 });
 
 const verificationCodes = new Map();
+
+// ==================== EMAIL HELPER ====================
+async function sendEmailWithRetry(mailOptions, retries = 2) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const result = await transporter.sendMail(mailOptions);
+      console.log(`✅ Email sent successfully to ${mailOptions.to}`);
+      return result;
+    } catch (error) {
+      console.warn(
+        `⚠️  Email send attempt ${attempt}/${retries} failed:`,
+        error.code,
+        error.message,
+      );
+      if (attempt === retries) {
+        throw error;
+      }
+      // Wait before retrying
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+}
 
 // ==================== HELPER ====================
 function generateElectionId(date = new Date()) {
@@ -319,7 +352,7 @@ app.post("/api/send-verification", async (req, res) => {
       expires: Date.now() + 10 * 60 * 1000,
     });
 
-    await transporter.sendMail({
+    await sendEmailWithRetry({
       from: '"JOLNHS SSG Election" <hugobayani@gmail.com>',
       to: normalized,
       subject: "SSG Election Verification Code",
@@ -335,9 +368,8 @@ app.post("/api/send-verification", async (req, res) => {
     console.error("Send verification error:", {
       message: err.message,
       code: err.code,
-      response: err.response,
     });
-    res.status(500).json({ error: "Failed to send code" });
+    res.status(500).json({ error: "Failed to send code - please try again" });
   }
 });
 
@@ -1276,7 +1308,7 @@ app.post(
       });
 
       // Send email
-      await transporter.sendMail({
+      await sendEmailWithRetry({
         from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
         to: normalizedEmail,
         subject: "Club Registration Verification Code",
@@ -1295,9 +1327,8 @@ app.post(
       console.error("Club send-verification error:", {
         message: err.message,
         code: err.code,
-        response: err.response,
       });
-      res.status(500).json({ error: "Failed to send verification code" });
+      res.status(500).json({ error: "Failed to send verification code - please try again" });
     }
   },
 );
@@ -1636,7 +1667,7 @@ app.get("/api/announcement", async (req, res) => {
   }
 });
 // Server
-const PORT =  5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`SSG Voting Backend running on http://localhost:${PORT}`);
   console.log(`Ready for election!`);
