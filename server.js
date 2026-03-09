@@ -235,17 +235,14 @@ const ElectionSettings = mongoose.model(
 );
 // ==================== NODEMAILER ====================
 const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: 465,
+  service: "gmail",
   auth: {
     user: "hugobayani@gmail.com",
     pass: "whqwotnlcgosvfpi",
   },
-  tls: {
-    rejectUnauthorized: false, // For development/testing with Gmail
-  },
+  tls: { rejectUnauthorized: false },
 });
+
 const verificationCodes = new Map();
 
 // ==================== HELPER ====================
