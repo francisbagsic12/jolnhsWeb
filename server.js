@@ -236,10 +236,16 @@ const ElectionSettings = mongoose.model(
 );
 // ==================== NODEMAILER ====================
 const transporter = nodemailer.createTransport({
-  service: "smtp.gmail.com",
+host: "smtp.gmail.com",
+  port: 587,                    
+  secure: false,                
+  requireTLS: true,             
+  connectionTimeout: 10000,     
+  greetingTimeout: 10000,
+  socketTimeout: 10000,
   auth: {
     user: "hugobayani@gmail.com",
-    pass: "bfjwjeinfmcwwqzp",
+    pass: "bfjwjeinfmcwwqzp",   // Your app password (confirm it's still valid!)
   },
   tls: { rejectUnauthorized: false },
 });
