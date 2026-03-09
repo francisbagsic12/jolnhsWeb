@@ -1,7 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const rateLimit = require("express-rate-limit");
+// const rateLimit = require("express-rate-limit");
 const nodemailer = require("nodemailer");
 require("dotenv").config();
 
@@ -13,10 +13,9 @@ app.use(
     origin: [
       "http://localhost:3000",
       "http://localhost:5173",
-      "https://jolnhswebv2.onrender.com",
       "https://jolnhs-admin-control.netlify.app",
       "https://jolnhs-e-voting.netlify.app",
-      "https://e-voting-jolnhs.netlify.app",
+      "https://e-voting-jolnhs.netlify.app"
     ],
     credentials: true,
   }),
@@ -30,19 +29,19 @@ app.use(express.json());
 // });
 // app.use("/api/", limiter);
 
-const clubVerificationLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 5, // limit each IP to 5 requests per window
-  message: {
-    error: "Too many verification attempts. Try again after 10 minutes.",
-  },
-  keyGenerator: (req) => req.ip,
-});
-const clubVerificationCodes = new Map();
-// Log every incoming request (great for debugging)
-app.use((req, res, next) => {
-  next();
-});
+// const clubVerificationLimiter = rateLimit({
+//   windowMs: 10 * 60 * 1000, // 10 minutes
+//   max: 5, // limit each IP to 5 requests per window
+//   message: {
+//     error: "Too many verification attempts. Try again after 10 minutes.",
+//   },
+//   keyGenerator: (req) => req.ip,
+// });
+// const clubVerificationCodes = new Map();
+// // Log every incoming request (great for debugging)
+// app.use((req, res, next) => {
+//   next();
+// });
 
 // ==================== MONGO CONNECTION ====================
 const MONGODB_URI =
@@ -242,8 +241,6 @@ const transporter = nodemailer.createTransport({
   port: 587,
   secure: false,
   requireTLS: true,
-  logger: false,
-  debug:true,
   auth: {
     user: process.env.EMAIL_USER || "hugobayani@gmail.com",
     pass: process.env.EMAIL_PASS || "whqwotnlcgosvfpi",
@@ -259,14 +256,15 @@ const transporter = nodemailer.createTransport({
     maxConnections: 1, // Render.com: use single connection
     maxMessages: 5, // Very conservative
     rateDelta: 5000,
-    // rateLimit: 5,
   },
   keepAlive: true,
-
+  logger: false,
 });
 
 // Skip verification on startup (Render.com blocks SMTP on initial connect)
-console.log("✅ Email transporter configured (verification skipped for Render.com compatibility)");
+console.log(
+  "✅ Email transporter configured (verification skipped for Render.com compatibility)",
+);
 
 // Email retry helper with aggressive backoff for Render.com
 async function sendEmailWithRetry(mailOptions, retries = 4) {
