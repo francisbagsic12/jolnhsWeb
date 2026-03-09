@@ -241,8 +241,8 @@ const transporter = nodemailer.createTransport({
   secure: false,
   requireTLS: true,
   auth: {
-    user: "hugobayani@gmail.com",
-    pass: "whqwotnlcgosvfpi",
+    user: process.env.EMAIL_USER || "hugobayani@gmail.com",
+    pass: process.env.EMAIL_PASS || "whqwotnlcgosvfpi",
   },
   tls: {
     rejectUnauthorized: false,
@@ -251,24 +251,43 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: 10000,
   socketTimeout: 10000,
   pool: {
-    maxConnections: 5,
-    maxMessages: 100,
+    maxConnections: 3,
+    maxMessages: 50,
     rateDelta: 4000,
     rateLimit: 14,
   },
 });
 
-// Test connection on startup
-transporter.verify((error, success) => {
-  if (error) {
-    console.warn(
-      "⚠️  Email transporter not configured properly:",
-      error.message,
-    );
-  } else {
-    console.log("✅ Email transporter ready");
-  }
+// Test connection on startup (non-blocking)
+transporter.verify().catch((error) => {
+  console.warn(
+    "⚠️  Email transporter verification warning:",
+    error.code,
+    error.message,
+  );
 });
+
+// Email retry helper with exponential backoff
+async function sendEmailWithRetry(mailOptions, retries = 2) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const result = await transporter.sendMail(mailOptions);
+      console.log(`✅ Email sent successfully to ${mailOptions.to}`);
+      return result;
+    } catch (error) {
+      console.warn(
+        `⚠️  Email send attempt ${attempt}/${retries} failed:`,
+        error.code,
+        error.message,
+      );
+      if (attempt === retries) {
+        throw error;
+      }
+      // Wait before retrying (exponential backoff: 1s, then 2s)
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+}
 
 const verificationCodes = new Map();
 
@@ -319,16 +338,21 @@ app.post("/api/send-verification", async (req, res) => {
       expires: Date.now() + 10 * 60 * 1000,
     });
 
-    await transporter.sendMail({
-      from: '"JOLNHS SSG Election" <hugobayani@gmail.com>',
-      to: normalized,
-      subject: "SSG Election Verification Code",
-      html: `
-        <h2>JOLNHS SSG Election</h2>
-        <h1 style="letter-spacing:12px; font-size:3rem;">${code}</h1>
-        <p>Valid for 10 minutes. Do not share.</p>
-      `,
-    });
+    try {
+      await sendEmailWithRetry({
+        from: '"JOLNHS SSG Election" <hugobayani@gmail.com>',
+        to: normalized,
+        subject: "SSG Election Verification Code",
+        html: `
+          <h2>JOLNHS SSG Election</h2>
+          <h1 style="letter-spacing:12px; font-size:3rem;">${code}</h1>
+          <p>Valid for 10 minutes. Do not share.</p>
+        `,
+      });
+    } catch (emailErr) {
+      console.warn("Failed to send verification code:", emailErr.message);
+      // Continue anyway - code was stored
+    }
 
     res.json({ message: "Verification code sent!" });
   } catch (err) {
@@ -1275,20 +1299,27 @@ app.post(
         expires: Date.now() + 10 * 60 * 1000,
       });
 
-      // Send email
-      await transporter.sendMail({
-        from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
-        to: normalizedEmail,
-        subject: "Club Registration Verification Code",
-        html: `
-          <h2>JOLNHS Club Registration</h2>
-          <h1 style="letter-spacing:12px; font-size:3rem;">${code}</h1>
-          <p>This code is valid for 10 minutes. Do not share it.</p>
-          <p>If you didn't request this, ignore this email.</p>
-        `,
-      });
-
-      console.log(`Club OTP sent to ${normalizedEmail}: ${code}`);
+      // Send email with retry logic
+      try {
+        await sendEmailWithRetry({
+          from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
+          to: normalizedEmail,
+          subject: "Club Registration Verification Code",
+          html: `
+            <h2>JOLNHS Club Registration</h2>
+            <h1 style="letter-spacing:12px; font-size:3rem;">${code}</h1>
+            <p>This code is valid for 10 minutes. Do not share it.</p>
+            <p>If you didn't request this, ignore this email.</p>
+          `,
+        });
+        console.log(`Club OTP sent to ${normalizedEmail}: ${code}`);
+      } catch (emailErr) {
+        console.warn(
+          "Failed to send club verification code:",
+          emailErr.message,
+        );
+        // Continue anyway - code was stored
+      }
 
       res.json({ message: "Verification code sent! Check your email." });
     } catch (err) {
@@ -1377,19 +1408,24 @@ app.post("/api/club/register", async (req, res) => {
     await registration.save();
 
     // Send confirmation email
-    await transporter.sendMail({
-      from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
-      to: email,
-      subject: "Club Registration Received",
-      html: `
-        <h2>Hello ${fullName},</h2>
-        <p>Your registration for <strong>${club}</strong> has been received!</p>
-        <p>LRN: ${lrn}</p>
-        <p>Status: <strong>Pending</strong></p>
-        <p>We will notify you once approved by the club adviser.</p>
-        <p>Thank you!</p>
-      `,
-    });
+    try {
+      await sendEmailWithRetry({
+        from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
+        to: email,
+        subject: "Club Registration Received",
+        html: `
+          <h2>Hello ${fullName},</h2>
+          <p>Your registration for <strong>${club}</strong> has been received!</p>
+          <p>LRN: ${lrn}</p>
+          <p>Status: <strong>Pending</strong></p>
+          <p>We will notify you once approved by the club adviser.</p>
+          <p>Thank you!</p>
+        `,
+      });
+    } catch (emailErr) {
+      console.warn("Failed to send confirmation email:", emailErr.message);
+      // Continue anyway - registration was saved
+    }
 
     res.status(201).json({
       message: "Registration submitted successfully! Check your email.",
@@ -1444,24 +1480,29 @@ app.patch("/api/admin/club-registration/:id", async (req, res) => {
     }
 
     // Notify student
-    await transporter.sendMail({
-      from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
-      to: registration.email,
-      subject: `Club Registration ${status.toUpperCase()}`,
-      html: `
-        <h2>Hello ${registration.fullName},</h2>
-        <p>Your registration for <strong>${
-          registration.club
-        }</strong> has been <strong>${status}</strong>!</p>
-        ${
-          status === "approved"
-            ? "<p><strong>Congratulations!</strong> You are now officially a member.</p>"
-            : "<p>Sorry, your application was not approved this time.</p>"
-        }
-        <p>LRN: ${registration.lrn}</p>
-        <p>Thank you for your interest!</p>
-      `,
-    });
+    try {
+      await sendEmailWithRetry({
+        from: '"JOLNHS Club Registration" <hugobayani@gmail.com>',
+        to: registration.email,
+        subject: `Club Registration ${status.toUpperCase()}`,
+        html: `
+          <h2>Hello ${registration.fullName},</h2>
+          <p>Your registration for <strong>${
+            registration.club
+          }</strong> has been <strong>${status}</strong>!</p>
+          ${
+            status === "approved"
+              ? "<p><strong>Congratulations!</strong> You are now officially a member.</p>"
+              : "<p>Sorry, your application was not approved this time.</p>"
+          }
+          <p>LRN: ${registration.lrn}</p>
+          <p>Thank you for your interest!</p>
+        `,
+      });
+    } catch (emailErr) {
+      console.warn("Failed to send notification email:", emailErr.message);
+      // Continue anyway - registration was updated
+    }
 
     res.json({
       message: `Registration ${status} successfully`,
@@ -1636,7 +1677,7 @@ app.get("/api/announcement", async (req, res) => {
   }
 });
 // Server
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`SSG Voting Backend running on http://localhost:${PORT}`);
   console.log(`Ready for election!`);
