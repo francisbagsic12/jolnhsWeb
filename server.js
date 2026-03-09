@@ -259,7 +259,7 @@ const transporter = nodemailer.createTransport({
     maxConnections: 1, // Render.com: use single connection
     maxMessages: 5, // Very conservative
     rateDelta: 5000,
-    rateLimit: 5,
+    // rateLimit: 5,
   },
   keepAlive: true,
 
@@ -1272,7 +1272,7 @@ app.get("/api/admin/dashboard-voting-stats", async (req, res) => {
 
 app.post(
   "/api/club/send-verification",
-  clubVerificationLimiter,
+
   async (req, res) => {
     const { email } = req.body;
 
