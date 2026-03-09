@@ -237,19 +237,15 @@ const ElectionSettings = mongoose.model(
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,
-  secure: false,           // VERY IMPORTANT: false for 587 (uses STARTTLS)
-  requireTLS: true,        // helps force TLS upgrade
-  connectionTimeout: 10000, // 10 seconds – can increase to 15000 if still slow
-  greetingTimeout: 10000,
-  socketTimeout: 10000,
+  secure: 465,
   auth: {
     user: "hugobayani@gmail.com",
-    pass: "whqwotnlcgosvfpi",   // ← must be App Password (see below)
+    pass: "whqwotnlcgosvfpi",
   },
-  logger: true,   // ← very helpful for debugging – logs more info
-  debug: true,
+  tls: {
+    rejectUnauthorized: false, // For development/testing with Gmail
+  },
 });
-
 const verificationCodes = new Map();
 
 // ==================== HELPER ====================
