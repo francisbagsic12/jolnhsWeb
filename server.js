@@ -237,7 +237,7 @@ const ElectionSettings = mongoose.model(
 );
 // ==================== NODEMAILER ====================
 const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
+  service: "gmail",
   port: 587,
   secure: false,
   requireTLS: true,
