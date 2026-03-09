@@ -1217,7 +1217,6 @@ app.get("/api/admin/dashboard-voting-stats", async (req, res) => {
 // ==================== CLUB VERIFICATION ROUTE (FIXED) ====================
 app.post(
   "/api/club/send-verification",
-  clubVerificationLimiter,
   async (req, res) => {
     const { email } = req.body;
 
