@@ -10,8 +10,6 @@ const app = express();
 app.use(
   cors({
     origin: [
-      "http://localhost:3000",
-      "http://localhost:5173",
       "https://jolnhs-admin-control.netlify.app",
       "https://jolnhs-e-voting.netlify.app",
       "https://jolnhsweb.onrender.com"
