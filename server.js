@@ -14,7 +14,7 @@ app.use(
       "http://localhost:3000",
       "http://localhost:5173",
       "https://jolnhs-admin-control.netlify.app",
-      "https://jolnhs-e-voting.netlify.app",
+      "https://e-voting-jolnhs.netlify.app"
     ],
     credentials: true,
   }),
