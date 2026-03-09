@@ -37,11 +37,11 @@ app.use(express.json());
 //   },
 //   keyGenerator: (req) => req.ip,
 // });
-// const clubVerificationCodes = new Map();
-// // Log every incoming request (great for debugging)
-// app.use((req, res, next) => {
-//   next();
-// });
+const clubVerificationCodes = new Map();
+// Log every incoming request (great for debugging)
+app.use((req, res, next) => {
+  next();
+});
 
 // ==================== MONGO CONNECTION ====================
 const MONGODB_URI =
