@@ -14,7 +14,8 @@ app.use(
       "http://localhost:5173",
       "https://jolnhs-admin-control.netlify.app",
       "https://jolnhs-e-voting.netlify.app",
-      "https://jolnhs-e-voting.netlify.app/register-club",
+      "https://jolnhsweb.onrender.com"
+     
       
     ],
     credentials: true,
