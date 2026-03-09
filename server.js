@@ -14,7 +14,7 @@ app.use(
       "http://localhost:3000",
       "http://localhost:5173",
       "https://jolnhs-admin-control.netlify.app",
-      "https://e-voting-jolnhs.netlify.app"
+      "https://jolnhs-e-voting.netlify.app",
     ],
     credentials: true,
   }),
@@ -248,27 +248,24 @@ const transporter = nodemailer.createTransport({
     rejectUnauthorized: false,
     minVersion: "TLSv1.2",
   },
-  connectionTimeout: 10000,
-  socketTimeout: 10000,
+  connectionTimeout: 30000, // Increased to 30s for Render.com
+  socketTimeout: 30000, // Increased to 30s
+  greetingTimeout: 10000,
   pool: {
-    maxConnections: 3,
-    maxMessages: 50,
-    rateDelta: 4000,
-    rateLimit: 14,
+    maxConnections: 1, // Render.com: use single connection
+    maxMessages: 5, // Very conservative
+    rateDelta: 5000,
+    rateLimit: 5,
   },
+  keepAlive: true,
+  logger: false,
 });
 
-// Test connection on startup (non-blocking)
-transporter.verify().catch((error) => {
-  console.warn(
-    "⚠️  Email transporter verification warning:",
-    error.code,
-    error.message,
-  );
-});
+// Skip verification on startup (Render.com blocks SMTP on initial connect)
+console.log("✅ Email transporter configured (verification skipped for Render.com compatibility)");
 
-// Email retry helper with exponential backoff
-async function sendEmailWithRetry(mailOptions, retries = 2) {
+// Email retry helper with aggressive backoff for Render.com
+async function sendEmailWithRetry(mailOptions, retries = 4) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const result = await transporter.sendMail(mailOptions);
@@ -283,8 +280,11 @@ async function sendEmailWithRetry(mailOptions, retries = 2) {
       if (attempt === retries) {
         throw error;
       }
-      // Wait before retrying (exponential backoff: 1s, then 2s)
-      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      // Aggressive backoff: 2s, 5s, 10s (for Render timeout issues)
+      const delays = [2000, 5000, 10000];
+      const waitTime = delays[attempt - 1] || 10000;
+      console.log(`⏳ Retrying in ${waitTime}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
   }
 }
