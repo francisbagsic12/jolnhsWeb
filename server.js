@@ -244,7 +244,7 @@ const transporter = nodemailer.createTransport({
   socketTimeout: 10000,
   auth: {
     user: "hugobayani@gmail.com",
-    pass: "bfjwjeinfmcwwqzp",   // ← must be App Password (see below)
+    pass: "whqwotnlcgosvfpi",   // ← must be App Password (see below)
   },
   logger: true,   // ← very helpful for debugging – logs more info
   debug: true,
