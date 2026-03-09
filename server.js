@@ -242,6 +242,8 @@ const transporter = nodemailer.createTransport({
   port: 587,
   secure: false,
   requireTLS: true,
+  logger: false,
+  debug:true,
   auth: {
     user: process.env.EMAIL_USER || "hugobayani@gmail.com",
     pass: process.env.EMAIL_PASS || "whqwotnlcgosvfpi",
@@ -260,7 +262,7 @@ const transporter = nodemailer.createTransport({
     rateLimit: 5,
   },
   keepAlive: true,
-  logger: false,
+
 });
 
 // Skip verification on startup (Render.com blocks SMTP on initial connect)
