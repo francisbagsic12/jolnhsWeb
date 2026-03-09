@@ -16,6 +16,7 @@ app.use(
       "https://jolnhswebv2.onrender.com",
       "https://jolnhs-admin-control.netlify.app",
       "https://jolnhs-e-voting.netlify.app",
+      "https://e-voting-jolnhs.netlify.app",
     ],
     credentials: true,
   }),
