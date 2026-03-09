@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const nodemailer = require("nodemailer");
+require("dotenv").config();
 
 const app = express();
 
@@ -235,12 +236,38 @@ const ElectionSettings = mongoose.model(
 );
 // ==================== NODEMAILER ====================
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false,
+  requireTLS: true,
   auth: {
-    user: "hugobayani@gmail.com",
-    pass: "whqwotnlcgosvfpi",
+    user: process.env.EMAIL_USER || "hugobayani@gmail.com",
+    pass: process.env.EMAIL_PASS || "whqwotnlcgosvfpi",
   },
-  tls: { rejectUnauthorized: false },
+  tls: {
+    rejectUnauthorized: false,
+    minVersion: "TLSv1.2",
+  },
+  connectionTimeout: 10000,
+  socketTimeout: 10000,
+  pool: {
+    maxConnections: 5,
+    maxMessages: 100,
+    rateDelta: 4000,
+    rateLimit: 14,
+  },
+});
+
+// Test connection on startup
+transporter.verify((error, success) => {
+  if (error) {
+    console.warn(
+      "⚠️  Email transporter not configured properly:",
+      error.message,
+    );
+  } else {
+    console.log("✅ Email transporter ready");
+  }
 });
 
 const verificationCodes = new Map();
@@ -305,7 +332,11 @@ app.post("/api/send-verification", async (req, res) => {
 
     res.json({ message: "Verification code sent!" });
   } catch (err) {
-    console.error("Send verification error:", err);
+    console.error("Send verification error:", {
+      message: err.message,
+      code: err.code,
+      response: err.response,
+    });
     res.status(500).json({ error: "Failed to send code" });
   }
 });
@@ -1261,7 +1292,11 @@ app.post(
 
       res.json({ message: "Verification code sent! Check your email." });
     } catch (err) {
-      console.error("Club send-verification error:", err);
+      console.error("Club send-verification error:", {
+        message: err.message,
+        code: err.code,
+        response: err.response,
+      });
       res.status(500).json({ error: "Failed to send verification code" });
     }
   },
@@ -1361,7 +1396,11 @@ app.post("/api/club/register", async (req, res) => {
       registrationId: registration._id.toString(),
     });
   } catch (err) {
-    console.error("Club registration error:", err);
+    console.error("Club registration error:", {
+      message: err.message,
+      code: err.code,
+      response: err.response,
+    });
     if (err.name === "ValidationError") {
       return res.status(400).json({ error: err.message });
     }
@@ -1429,7 +1468,11 @@ app.patch("/api/admin/club-registration/:id", async (req, res) => {
       registration,
     });
   } catch (err) {
-    console.error("Update club registration error:", err);
+    console.error("Update club registration error:", {
+      message: err.message,
+      code: err.code,
+      response: err.response,
+    });
     res.status(500).json({ error: "Failed to update status" });
   }
 });
