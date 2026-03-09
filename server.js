@@ -241,8 +241,8 @@ const transporter = nodemailer.createTransport({
   secure: false,
   requireTLS: true,
   auth: {
-    user: process.env.EMAIL_USER || "hugobayani@gmail.com",
-    pass: process.env.EMAIL_PASS || "whqwotnlcgosvfpi",
+    user: "hugobayani@gmail.com",
+    pass: "whqwotnlcgosvfpi",
   },
   tls: {
     rejectUnauthorized: false,
@@ -1636,7 +1636,7 @@ app.get("/api/announcement", async (req, res) => {
   }
 });
 // Server
-const PORT = process.env.PORT || 5000;
+const PORT =  5000;
 app.listen(PORT, () => {
   console.log(`SSG Voting Backend running on http://localhost:${PORT}`);
   console.log(`Ready for election!`);
